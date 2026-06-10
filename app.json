@@ -1,0 +1,78 @@
+{
+  "name": "KLOWEN-MD",
+  "description": "Le meilleur bot WhatsApp moderne développé par LORMIL.",
+  "logo": "https://catbox.moe",
+  "keywords": [
+    "whatsapp bot",
+    "klowen",
+    "lormil"
+  ],
+  "repository": "https://github.com",
+  "stack": "heroku-24",
+  "env": {
+    "SESSION_ID": {
+      "description": "Collez ici le Session ID que vous avez récupéré avec le générateur de session.",
+      "required": true,
+      "value": ""
+    },
+    "OWNER_NAME": {
+      "description": "Entrez votre nom de créateur.",
+      "required": false,
+      "value": "LORMIL"
+    },
+    "PREFIX": {
+      "description": "Entrez le préfixe de commande du bot.",
+      "required": false,
+      "value": "!"
+    },
+    "MODE": {
+      "description": "Entrez 'public' ou 'private' pour restreindre l'utilisation du bot.",
+      "required": true,
+      "value": "public"
+    },
+    "AUTO_STATUS_SEEN": {
+      "description": "Entrez 'true' pour regarder automatiquement les statuts de vos contacts, ou laissez vide.",
+      "required": false,
+      "value": "true"
+    },
+    "AUTO_READ": {
+      "description": "Entrez 'true' pour marquer automatiquement les messages comme lus, ou laissez vide.",
+      "required": false,
+      "value": ""
+    },
+    "AUTO_TYPING": {
+      "description": "Entrez 'true' pour simuler une écriture clavier avant de répondre, ou laissez vide.",
+      "required": false,
+      "value": ""
+    },
+    "AUTO_RECORDING": {
+      "description": "Entrez 'true' pour simuler un enregistrement audio avant de répondre, ou laissez vide.",
+      "required": false,
+      "value": ""
+    },
+    "ALWAYS_ONLINE": {
+      "description": "Entrez 'true' pour afficher votre compte toujours en ligne, ou laissez vide.",
+      "required": false,
+      "value": ""
+    },
+    "REJECT_CALL": {
+      "description": "Entrez 'true' pour rejeter automatiquement les appels WhatsApp entrants, ou laissez vide.",
+      "required": false,
+      "value": ""
+    }
+  },
+  "buildpacks": [
+    {
+      "url": "heroku/nodejs"
+    },
+    {
+      "url": "https://github.com"
+    },
+    {
+      "url": "https://github.com"
+    },
+    {
+      "url": "https://github.com"
+    }
+  ]
+}
