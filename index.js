@@ -1,184 +1,166 @@
-
+require('dotenv').config(); 
 const { 
     default: makeWASocket, 
     useMultiFileAuthState, 
     DisconnectReason, 
-    makeInMemoryStore 
+    Browsers, 
+    delay 
 } = require("@whiskeysockets/baileys");
-const qrcode = require("qrcode-terminal");
 const pino = require("pino");
+const fs = require("fs");
 
-const startTime = Date.now();
-
-// Fonctions utilitaires pour le menu
-function getUptime() {
-    const duration = Date.now() - startTime;
-    let seconds = Math.floor((duration / 1000) % 60);
-    let minutes = Math.floor((duration / (1000 * 60)) % 60);
-    let hours = Math.floor((duration / (1000 * 60 * 60)) % 24);
-    return `${hours}h ${minutes}m ${seconds}s`;
+// 🔑 ÉTAPE 1 : Décodage automatique du SESSION_ID d'Heroku/Render
+function decodeSession() {
+    const sessionId = process.env.SESSION_ID;
+    if (!sessionId) {
+        console.log("❌ ERREUR COMPTE : Aucun SESSION_ID trouvé dans l'environnement !");
+        process.exit(1);
+    }
+    if (!fs.existsSync('./session_auth')) {
+        fs.mkdirSync('./session_auth');
+    }
+    try {
+        // Nettoyage au cas où le générateur ajoute un préfixe avec un symbole ~
+        const cleanData = sessionId.includes('~') ? sessionId.split('~')[1] : sessionId;
+        const decrypted = Buffer.from(cleanData, 'base64').toString('utf-8');
+        fs.writeFileSync('./session_auth/creds.json', decrypted);
+        console.log("✅ [KLOWEN-MD] Session synchronisée avec succès !");
+    } catch (err) {
+        console.log("❌ Erreur de décodage de votre SESSION_ID :", err.message);
+        process.exit(1);
+    }
 }
-
-function getMemoryUsage() {
-    return `${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)} MB`;
-}
-
-// Nettoyage et formatage du numéro du propriétaire depuis le .env
-function getOwnerJid() {
-    const rawNumber = process.env.NUMBER_OWNER || "";
-    // Supprime tout ce qui n'est pas un chiffre (parenthèses, espaces, etc.)
-    const cleanNumber = rawNumber.replace(/\D/g, "");
-    return cleanNumber ? `${cleanNumber}@s.whatsapp.net` : null;
-}
-
-const store = makeInMemoryStore({ logger: pino().child({ level: 'silent', stream: 'store' }) });
-store.readFromFile('./baileys_store.json');
-setInterval(() => {
-    store.writeToFile('./baileys_store.json');
-}, 10000);
 
 async function startBot() {
-    // Utilisation du dossier de session standard visible dans votre dossier KLOWEN-MD
+    decodeSession();
+
     const { state, saveCreds } = await useMultiFileAuthState('session_auth');
 
     const bot = makeWASocket({
         logger: pino({ level: "silent" }),
         auth: state,
-        browser: ["Ubuntu", "Chrome", "20.0.0"],
+        browser: Browsers.macOS("Desktop"),
         printQRInTerminal: false,
-        keepAliveIntervalMs: 30000,
-        connectTimeoutMs: 60000
+        keepAliveIntervalMs: 30000
     });
 
-    store.bind(bot.ev);
-
-    // Gestion de la connexion et affichage du QR Code
-    bot.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect, qr } = update;
-
-        if (qr) {
-            console.clear();
-            console.log("📌 SCANNEZ CE QR CODE AVEC WHATSAPP : \n");
-            qrcode.generate(qr, { small: true });
+    // 📞 GESTION DU REJET DES APPELS (Option REJECT_CALL)
+    bot.ev.on('call', async (callEvent) => {
+        if (process.env.REJECT_CALL === 'true') {
+            const callId = callEvent[0].id;
+            const from = callEvent[0].from;
+            await bot.rejectCall(callId, from);
+            await bot.sendMessage(from, { 
+                text: `⚠️ *[KLOWEN-MD]* : Les appels ne sont pas autorisés. Veuillez laisser un message écrit.` 
+            });
         }
+    });
+
+    bot.ev.on('connection.update', (update) => {
+        const { connection, lastDisconnect } = update;
 
         if (connection === 'open') {
             console.clear();
             console.log("=============================================");
-            console.log("✅ [KLOWEN-MD] CONNECTÉ AVEC SUCCÈS !");
-            console.log(`👑 Propriétaire : ${process.env.OWNER_NAME || "LORMIL"}`);
-            console.log(`🎵 Pack Sticker : ${process.env.STICKER_PACK_NAME || "LORMIL"}`);
+            console.log("✅ [KLOWEN-MD] EST CONNECTÉ ET EN LIGNE !");
+            console.log(`👑 Développeur : ${process.env.OWNER_NAME || 'LORMIL'}`);
+            console.log(`🌍 Mode Actif  : ${process.env.MODE || 'public'}`);
             console.log("=============================================");
+            
+            // Statut En Ligne Permanent (Option ALWAYS_ONLINE)
+            if (process.env.ALWAYS_ONLINE === 'true') {
+                bot.sendPresenceUpdate('available');
+            }
         }
 
         if (connection === 'close') {
-            const reason = lastDisconnect?.error?.output?.statusCode;
-            if (reason !== DisconnectReason.loggedOut) {
-                console.log(`🔄 Connexion perdue. Reconnexion en cours...`);
+            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+            if (shouldReconnect) {
+                console.log("🔄 Reconnexion au serveur WhatsApp...");
                 startBot();
-            } else {
-                console.log(`❌ Session expirée. Veuillez vider le dossier 'session_auth' et relancer.`);
             }
         }
     });
 
     bot.ev.on('creds.update', saveCreds);
 
-    // Réception et traitement des messages
+    // 💬 TRAITEMENT DES MESSAGES ET COMMANDES
     bot.ev.on('messages.upsert', async (m) => {
         if (m.type !== 'notify') return;
-        
-        const msg = m.messages[0]; 
+        const msg = m.messages[0];
         if (!msg || !msg.message) return;
 
         const remoteJid = msg.key.remoteJid;
 
-        // 🌟 GESTION AUTOMATIQUE DES STATUTS (Base de votre .env)
+        // 👁️ VUE AUTOMATIQUE DES STATUTS (Option AUTO_STATUS_SEEN)
         if (remoteJid === 'status@broadcast') {
             if (process.env.AUTO_STATUS_SEEN === 'true') {
                 await bot.readMessages([msg.key]);
-                console.log(`👁️ Statut vu automatiquement`);
+                console.log(`👁️ Statut vu automatiquement par KLOWEN-MD`);
             }
-            return; 
+            return;
         }
 
+        // Lecture automatique des messages (Option AUTO_READ)
+        if (process.env.AUTO_READ === 'true') {
+            await bot.readMessages([msg.key]);
+        }
+
+        // Sécurité contre ses propres messages
         if (msg.key.fromMe) return;
 
-        const pushName = msg.pushName || "Utilisateur";
+        // 🔐 GESTION DU MODE PUBLIC / PRIVÉ
+        const ownerNumber = process.env.NUMBER_OWNER ? process.env.NUMBER_OWNER.replace(/\D/g, '') : '';
+        const isOwner = remoteJid.includes(ownerNumber) || msg.key.participant?.includes(ownerNumber);
+        const mode = process.env.MODE || 'public';
+
+        if (mode === 'private' && !isOwner) return; // Ignore si le bot est en privé et que ce n'est pas vous
+
         const text = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
-        
-        // Lecture dynamique du préfixe défini dans votre .env
         const prefix = process.env.PREFIX || '!';
+
         if (!text.startsWith(prefix)) return;
 
         const args = text.slice(prefix.length).trim().split(/ +/);
         const command = args.shift().toLowerCase();
         const query = args.join(' ');
 
-        const ownerJid = getOwnerJid();
-        // Vérification sécurisée de l'owner (via JID individuel ou participant de groupe)
-        const isOwner = msg.key.participant === ownerJid || remoteJid === ownerJid;
+        // 🎭 SIMULATIONS (Options AUTO_TYPING et AUTO_RECORDING)
+        if (process.env.AUTO_TYPING === 'true') {
+            await bot.sendPresenceUpdate('composing', remoteJid);
+            await delay(1500);
+        } else if (process.env.AUTO_RECORDING === 'true') {
+            await bot.sendPresenceUpdate('recording', remoteJid);
+            await delay(1500);
+        }
 
-        // 1. COMMANDE MENU
-        if (command === 'menu') {
-            const devName = process.env.OWNER_NAME || 'LORMIL 👑';
+        // --- COMMANDES DU BOT ---
+        
+        // 1. COMMANDE PING
+        if (command === 'ping') {
+            await bot.sendMessage(remoteJid, { 
+                text: `🏓 *Pong !* \n\n*KLOWEN-MD* est ultra rapide et opérationnel.\n👑 Créateur : LORMIL` 
+            }, { quoted: msg });
+        }
 
+        // 2. COMMANDE MENU
+        else if (command === 'menu') {
+            const pushName = msg.pushName || "Utilisateur";
             const menuTexte = `╭───────────────⭓
-│ ʙᴏᴛ : KLOWEN-MD
+│ ʙᴏᴛ : KLOWEN-MD 👑
 │ ᴜsᴇʀ: ${pushName.toUpperCase()}
 │ ᴘʀᴇғɪx: ${prefix}
-│ ᴜᴘᴛɪᴍᴇ: ${getUptime()}
-│ ᴍᴇᴍᴏʀʏ : ${getMemoryUsage()}
-│ box_dev: ${devName}
+│ ᴍᴏᴅᴇ: ${mode.toUpperCase()}
+│ ᴅᴇᴠ: LORMIL
 ╰───────────────⭓
 
-⭓───────────────⭓『 🤖 ᴀɪ 』
-│ ⬡ ai          [FONCTIONNEL] ✅
-│ ⬡ deepseek    [FONCTIONNEL] ✅
-│ ⬡ openai      [FONCTIONNEL] ✅
-╰──────────────────⭓
-⭓───────────────⭓『 👑 ᴏᴡɴᴇʀ 』
-│ ⬡ restart     [RÉSERVÉ OWNER] 🔐
+⭓───────────────⭓『 ⚙️ GENERAL 』
+│ ⬡ ping
+│ ⬡ menu
 ╰──────────────────⭓`;
-
             await bot.sendMessage(remoteJid, { text: menuTexte }, { quoted: msg });
-        }
-
-        // 2. COMMANDES IA (ai, deepseek, openai)
-        else if (command === 'ai' || command === 'deepseek' || command === 'openai') {
-            if (!query) {
-                return await bot.sendMessage(remoteJid, { 
-                    text: `❌ Posez une question.\nExemple: *${prefix}${command} comment vas-tu ?*` 
-                }, { quoted: msg });
-            }
-            
-            await bot.sendMessage(remoteJid, { text: "🤖 *Klowen-AI analyse votre demande...*" }, { quoted: msg });
-
-            try {
-                // Correction du template string et intégration de l'API
-                const res = await fetch(`https://simsimi.net{encodeURIComponent(query)}&lc=fr`);
-                const data = await res.json();
-                const reponseIA = data.success || "Désolé, je ne parviens pas à formuler une réponse.";
-                
-                await bot.sendMessage(remoteJid, { 
-                    text: `🤖 *KLOWEN-AI (${command.toUpperCase()}) :*\n\n${reponseIA}` 
-                }, { quoted: msg });
-            } catch (err) {
-                await bot.sendMessage(remoteJid, { text: '⚠️ Serveur IA indisponible actuellement.' }, { quoted: msg });
-            }
-        }
-
-        // 3. COMMANDE OWNER : RESTART
-        else if (command === 'restart') {
-            if (!isOwner) {
-                return await bot.sendMessage(remoteJid, { text: "❌ Cette commande est réservée à mon créateur LORMIL." }, { quoted: msg });
-            }
-
-            await bot.sendMessage(remoteJid, { text: "🔄 *Redémarrage du bot en cours...*" }, { quoted: msg });
-            console.log("Reboot initié par le propriétaire...");
-            process.exit(0); 
         }
     });
 }
 
-startBot().catch(err => console.log("Erreur d'initialisation :", err));
+startBot().catch(err => console.error("Erreur de lancement :", err));
