@@ -16,3 +16,15 @@ Lors du déploiement, vous devrez remplir les variables d'environnement suivante
 * **PREFIX** : Le symbole pour déclencher les commandes (Par défaut : `!`).
 * **MODE** : Définir sur `public` ou `private`.
 * **AUTO_STATUS_SEEN** : Mettre `true` pour visionner les statuts automatiquement.
+
+python -m venv .venv
+
+.\.venv\Scripts\Activate.ps1
+
+pip install -r requirements.txt
+
+copy .env.example .env
+
+python -m pytest -q
+
+python -m streamlit run app.py
